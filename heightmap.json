@@ -1,0 +1,14 @@
+{
+  "width": 2560,
+  "height": 2046,
+  "minElev": 465.19000244140625,
+  "maxElev": 1906.8199462890625,
+  "bbox_wgs84": [
+    -111.5,
+    33.34,
+    -111.08,
+    33.62
+  ],
+  "source": "USGS 3DEP (lidar-derived) ImageServer exportImage",
+  "encoding": "uint16-le normalized 0..65535 maps minElev..maxElev"
+}

@@ -1,0 +1,8 @@
+# scratch / intermediate data-pull files
+*_raw.json
+svc.json
+dam_*.json
+fr79.json
+fr79_segs.json
+fr80*.json
+.DS_Store

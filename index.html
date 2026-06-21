@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Superstition Mountains — LIDAR Terrain</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1020;color:#cdd6f4;font:13px/1.5 system-ui,sans-serif;overflow:hidden}
+  #c{display:block;width:100vw;height:100vh}
+  #panel{position:fixed;top:12px;left:12px;background:rgba(17,22,40,.82);
+    border:1px solid #2a3354;border-radius:10px;padding:12px 14px;max-width:280px;backdrop-filter:blur(6px)}
+  #panel h1{margin:0 0 4px;font-size:15px;color:#fff}
+  #panel .sub{color:#8b94b8;font-size:11px;margin-bottom:10px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0}
+  .row label{color:#aeb6da}
+  input[type=range]{width:130px}
+  #stats{color:#7f8abf;font-size:11px;margin-top:8px;border-top:1px solid #2a3354;padding-top:8px}
+  #loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-size:16px;color:#8b94b8}
+  a{color:#89b4fa}
+</style>
+</head>
+<body>
+<div id="loading">Loading LIDAR terrain…</div>
+<canvas id="c"></canvas>
+<div id="panel" style="display:none">
+  <h1>Superstition Mountains</h1>
+  <div class="sub">USGS 3DEP lidar · Wilderness + Apache Trail canyons</div>
+  <div class="row"><label>Vertical exaggeration</label><span id="vxl">1.6×</span></div>
+  <div class="row"><input id="vx" type="range" min="1" max="4" step="0.1" value="1.6"></div>
+  <div class="row"><label>Sun azimuth</label><input id="az" type="range" min="0" max="360" step="1" value="315"></div>
+  <div class="row"><label>Sun height</label><input id="al" type="range" min="5" max="85" step="1" value="38"></div>
+  <div class="row"><label>Aerial imagery</label><input id="tex" type="checkbox"></div>
+  <div class="row"><label>Landmarks</label><input id="lm" type="checkbox" checked></div>
+  <div class="row"><label>Trails (OSM)</label><input id="trail" type="checkbox" checked></div>
+  <div class="row"><label>Wireframe</label><input id="wf" type="checkbox"></div>
+  <div class="row"><label>Top-down map view</label><input id="map" type="checkbox"></div>
+  <div class="row"><label>Free-fly (WASD)</label><input id="fly" type="checkbox"></div>
+  <div id="flyhint" style="display:none;color:#8b94b8;font-size:11px;margin:2px 0 0">
+    Drag to look · <b>W/A/S/D</b> move · <b>R/F</b> up/down · <b>Q/E</b> roll</div>
+  <div id="stats"></div>
+</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FlyControls } from 'three/addons/controls/FlyControls.js';
+
+const meta = await (await fetch('heightmap.json')).json();
+const buf  = await (await fetch('heightmap.bin')).arrayBuffer();
+const heights = new Uint16Array(buf);
+const W = meta.width, H = meta.height;
+
+// real-world ground size (meters)
+const [lon0,lat0,lon1,lat1] = meta.bbox_wgs84;
+const latMid = (lat0+lat1)/2 * Math.PI/180;
+const groundW = (lon1-lon0)*111320*Math.cos(latMid);
+const groundH = (lat1-lat0)*110574;
+const elevRange = meta.maxElev - meta.minElev;
+
+const renderer = new THREE.WebGLRenderer({canvas:document.getElementById('c'),antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1020);
+scene.fog = new THREE.Fog(0x0b1020, groundW*0.9, groundW*2.4);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 1, groundW*6);
+camera.position.set(groundW*0.55, elevRange*2.4, groundH*0.75);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.maxPolarAngle = Math.PI*0.49;
+// Google Earth-style: left = rotate/tilt, right-drag = pan across ground, wheel = zoom
+controls.screenSpacePanning = false;          // pan parallel to the ground, not the screen
+controls.panSpeed = 1.2;
+controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+renderer.domElement.addEventListener('contextmenu', e=>e.preventDefault()); // don't pop the OS menu on right-drag
+
+// geometry — plane in XZ, Y = elevation
+const geo = new THREE.PlaneGeometry(groundW, groundH, W-1, H-1);
+geo.rotateX(-Math.PI/2);
+const pos = geo.attributes.position;
+const colors = new Float32Array(pos.count*3);
+
+// terrain colormap (low -> high)
+function ramp(t){
+  const stops=[[0.00,[58,90,64]],[0.30,[96,120,70]],[0.55,[150,130,95]],
+               [0.78,[140,110,92]],[0.92,[170,165,160]],[1.0,[245,245,250]]];
+  for(let i=1;i<stops.length;i++){
+    if(t<=stops[i][0]){const a=stops[i-1],b=stops[i];const f=(t-a[0])/(b[0]-a[0]);
+      return [a[1][0]+(b[1][0]-a[1][0])*f, a[1][1]+(b[1][1]-a[1][1])*f, a[1][2]+(b[1][2]-a[1][2])*f];}
+  }
+  return stops[stops.length-1][1];
+}
+
+function applyHeights(vx){
+  for(let i=0;i<heights.length;i++){
+    const t = heights[i]/65535;
+    pos.setY(i, t*elevRange*vx);
+    const c = ramp(t);
+    colors[i*3]=c[0]/255; colors[i*3+1]=c[1]/255; colors[i*3+2]=c[2]/255;
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+}
+geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
+applyHeights(1.6);
+
+const mat = new THREE.MeshStandardMaterial({vertexColors:true, roughness:0.95, metalness:0.0, flatShading:false});
+const texMat = new THREE.MeshStandardMaterial({roughness:0.95, metalness:0.0});
+new THREE.TextureLoader().load('satellite.jpg', t=>{ t.colorSpace=THREE.SRGBColorSpace; texMat.map=t; texMat.needsUpdate=true; });
+const mesh = new THREE.Mesh(geo, mat);
+scene.add(mesh);
+document.getElementById('tex').onchange=e=>{ mesh.material = e.target.checked ? texMat : mat; };
+
+// ---- landmarks ----
+const LANDMARKS=[
+  {n:'Weavers Needle',      lat:33.4337, lon:-111.3690},
+  {n:'Flatiron',            lat:33.4286, lon:-111.4733},
+  {n:'Superstition Mtn',    lat:33.4350, lon:-111.4900},
+  {n:'Battleship Mtn',      lat:33.4694, lon:-111.4189},
+  {n:'Miners Needle',       lat:33.4105, lon:-111.3430},
+  {n:'Fremont Saddle',      lat:33.4470, lon:-111.3772},
+  {n:'Bluff Spring',        lat:33.4258, lon:-111.3372},
+  {n:'Peralta Trailhead',   lat:33.3974, lon:-111.3479},
+  {n:'First Water TH',      lat:33.4793, lon:-111.4486},
+  {n:'Siphon Draw TH',      lat:33.4637, lon:-111.4770},
+  {n:'Horse Mesa Dam',      lat:33.5747, lon:-111.2447},
+  {n:'Fish Creek Canyon',   lat:33.5680, lon:-111.3030},
+  {n:'Fish Creek Hill',     lat:33.5610, lon:-111.3105},
+  {n:'Apache Lake',         lat:33.5840, lon:-111.2520},
+  {n:'Canyon Lake',         lat:33.5350, lon:-111.4220},
+  {n:'Tortilla Flat',       lat:33.5267, lon:-111.3873},
+  {n:'Coronado Mesa',       lat:33.5550, lon:-111.3418},
+  {n:'Fish Creek Bridge',   lat:33.5347, lon:-111.3035},
+];
+function labelSprite(text){
+  const pad=12, fs=30, c=document.createElement('canvas'), x=c.getContext('2d');
+  x.font=`600 ${fs}px system-ui,sans-serif`; const w=x.measureText(text).width;
+  c.width=w+pad*2; c.height=fs+pad*2;
+  x.font=`600 ${fs}px system-ui,sans-serif`; x.textBaseline='middle';
+  x.fillStyle='rgba(11,16,32,.82)'; x.strokeStyle='#89b4fa'; x.lineWidth=2;
+  const r=10; x.beginPath(); x.roundRect(1,1,c.width-2,c.height-2,r); x.fill(); x.stroke();
+  x.fillStyle='#fff'; x.fillText(text,pad,c.height/2);
+  const tex=new THREE.CanvasTexture(c); tex.colorSpace=THREE.SRGBColorSpace;
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,depthTest:false,transparent:true}));
+  s.scale.set(c.width/c.height*420,420,1); s.center.set(0.5,0);
+  s.renderOrder=999; return s;
+}
+const markers=new THREE.Group(); scene.add(markers);
+for(const L of LANDMARKS){
+  const u=(L.lon-lon0)/(lon1-lon0), v=(lat1-L.lat)/(lat1-lat0);
+  const col=Math.max(0,Math.min(W-1,Math.round(u*(W-1))));
+  const row=Math.max(0,Math.min(H-1,Math.round(v*(H-1))));
+  L.t=heights[row*W+col]/65535;
+  L.x=u*groundW-groundW/2; L.z=v*groundH-groundH/2;
+  const g=new THREE.Group();
+  const pin=new THREE.Mesh(new THREE.SphereGeometry(120,16,16),
+    new THREE.MeshBasicMaterial({color:0x89b4fa,depthTest:false}));
+  pin.renderOrder=998;
+  const lbl=labelSprite(L.n); lbl.position.y=180;
+  g.add(pin); g.add(lbl); g.position.set(L.x,0,L.z); g.userData.L=L; markers.add(g);
+}
+function updateMarkers(vx){ for(const g of markers.children) g.position.y=g.userData.L.t*elevRange*vx+200; }
+document.getElementById('lm').onchange=e=>markers.visible=e.target.checked;
+
+// ---- real OSM trails (draped) ----
+function ll(lat,lon){
+  const u=(lon-lon0)/(lon1-lon0), v=(lat1-lat)/(lat1-lat0);
+  const col=Math.max(0,Math.min(W-1,Math.round(u*(W-1))));
+  const row=Math.max(0,Math.min(H-1,Math.round(v*(H-1))));
+  return {x:u*groundW-groundW/2, z:v*groundH-groundH/2, t:heights[row*W+col]/65535};
+}
+const trailsGroup=new THREE.Group(); scene.add(trailsGroup);
+let TRAILS=null;
+function buildTrail(vx){
+  if(!TRAILS) return;
+  trailsGroup.clear();
+  for(const [name,info] of Object.entries(TRAILS)){
+    const mat=new THREE.MeshBasicMaterial({color:new THREE.Color(info.color)});
+    const radius=info.road?150:75, lift=info.road?90:110;
+    for(const seg of info.segments){
+      if(seg.length<2) continue;
+      const pts=seg.map(([la,lo])=>{const p=ll(la,lo);return new THREE.Vector3(p.x,p.t*elevRange*vx+lift,p.z);});
+      const curve=new THREE.CatmullRomCurve3(pts);
+      const tubular=Math.min(600,Math.max(8,pts.length));
+      const g=new THREE.TubeGeometry(curve,tubular,radius,6,false);
+      const m=new THREE.Mesh(g,mat); m.renderOrder=997; trailsGroup.add(m);
+    }
+  }
+  trailsGroup.visible=document.getElementById('trail').checked;
+}
+document.getElementById('trail').onchange=e=>{ trailsGroup.visible=e.target.checked; };
+fetch('trails.json').then(r=>r.json()).then(j=>{
+  TRAILS=j; buildTrail(+document.getElementById('vx').value);
+  // legend
+  const leg=Object.entries(j).map(([n,i])=>
+    `<span style="color:${i.color}">■</span> ${n}`).join('<br>');
+  document.getElementById('stats').insertAdjacentHTML('beforeend',
+    `<div style="margin-top:8px;border-top:1px solid #2a3354;padding-top:8px;font-size:11px">`+
+    `<b>Trails (OpenStreetMap)</b><br>${leg}</div>`);
+});
+
+const sun = new THREE.DirectionalLight(0xfff1d0, 2.4);
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0x9fb6ff, 0x2a2418, 0.55));
+scene.add(new THREE.AmbientLight(0xffffff, 0.15));
+
+function placeSun(){
+  const az = +document.getElementById('az').value * Math.PI/180;
+  const al = +document.getElementById('al').value * Math.PI/180;
+  const r = groundW;
+  sun.position.set(Math.cos(al)*Math.sin(az)*r, Math.sin(al)*r, Math.cos(al)*Math.cos(az)*r);
+}
+placeSun();
+
+// UI
+const vx=document.getElementById('vx'),vxl=document.getElementById('vxl');
+vx.oninput=()=>{vxl.textContent=(+vx.value).toFixed(1)+'×';applyHeights(+vx.value);updateMarkers(+vx.value);buildTrail(+vx.value);};
+document.getElementById('az').oninput=placeSun;
+document.getElementById('al').oninput=placeSun;
+document.getElementById('wf').onchange=e=>mat.wireframe=e.target.checked;
+
+// shared camera fly animation
+let anim=null;
+function flyTo(toPos,toTgt,dur=800){
+  const from=camera.position.clone(), fromT=controls.target.clone(), t0=performance.now();
+  anim=()=>{ const k=Math.min(1,(performance.now()-t0)/dur), s=k*k*(3-2*k);
+    camera.position.lerpVectors(from,toPos,s); controls.target.lerpVectors(fromT,toTgt,s);
+    if(k<1) requestAnimationFrame(anim); else anim=null; };
+  requestAnimationFrame(anim);
+}
+
+// top-down map view
+let mapMode=false;
+const persPos=camera.position.clone(), persTgt=controls.target.clone();
+document.getElementById('map').onchange=e=>{
+  mapMode=e.target.checked;
+  if(mapMode){ controls.maxPolarAngle=Math.PI; flyTo(new THREE.Vector3(0,Math.max(groundW,groundH)*0.95,1), new THREE.Vector3(0,0,0)); }
+  else { controls.maxPolarAngle=Math.PI*0.49; flyTo(persPos.clone(), persTgt.clone()); }
+};
+
+// click a landmark label/pin to fly there
+const ray=new THREE.Raycaster(), ndc=new THREE.Vector2();
+let downXY=null;
+renderer.domElement.addEventListener('pointerdown',e=>downXY=[e.clientX,e.clientY]);
+renderer.domElement.addEventListener('pointerup',e=>{
+  if(!downXY || Math.hypot(e.clientX-downXY[0],e.clientY-downXY[1])>5) return; // ignore drags
+  ndc.set((e.clientX/innerWidth)*2-1, -(e.clientY/innerHeight)*2+1);
+  ray.setFromCamera(ndc,camera);
+  const hits=ray.intersectObjects(markers.children,true);
+  if(hits.length){
+    let g=hits[0].object; while(g && !g.userData.L) g=g.parent;
+    if(g){ const p=g.position, off=Math.max(groundW,groundH)*0.16;
+      flyTo(new THREE.Vector3(p.x, p.y+off*0.9, p.z+off), p.clone()); }
+  }
+});
+
+// free-fly mode (WASD + drag-to-look), swapped with orbit
+const clock = new THREE.Clock();
+let fly=null;
+document.getElementById('fly').onchange=e=>{
+  document.getElementById('flyhint').style.display = e.target.checked?'block':'none';
+  if(e.target.checked){
+    controls.enabled=false;
+    fly=new FlyControls(camera, renderer.domElement);
+    fly.movementSpeed=Math.max(groundW,groundH)*0.12;
+    fly.rollSpeed=0.6; fly.dragToLook=true; fly.autoForward=false;
+  } else if(fly){
+    fly.dispose(); fly=null;
+    // re-seat orbit target in front of camera to avoid a jump
+    const dir=new THREE.Vector3(); camera.getWorldDirection(dir);
+    controls.target.copy(camera.position).add(dir.multiplyScalar(Math.max(groundW,groundH)*0.25));
+    controls.enabled=true;
+  }
+};
+
+document.getElementById('stats').innerHTML =
+  `Grid ${W}×${H} · ${(W*H/1e6).toFixed(2)}M samples<br>`+
+  `Elev ${Math.round(meta.minElev)}–${Math.round(meta.maxElev)} m `+
+  `(${Math.round(meta.minElev*3.281)}–${Math.round(meta.maxElev*3.281)} ft)<br>`+
+  `Extent ≈ ${(groundW/1000).toFixed(1)}×${(groundH/1000).toFixed(1)} km`;
+
+updateMarkers(1.6);
+buildTrail(1.6);
+document.getElementById('loading').style.display='none';
+document.getElementById('panel').style.display='block';
+
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+(function loop(){requestAnimationFrame(loop);
+  const dt=clock.getDelta();
+  if(fly) fly.update(dt); else controls.update();
+  renderer.render(scene,camera);
+})();
+</script>
+</body>
+</html>
