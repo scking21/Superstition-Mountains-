@@ -33,7 +33,7 @@
   <div class="row"><label>Landmarks</label><input id="lm" type="checkbox" checked></div>
   <div class="row"><label>Trails (OSM)</label><input id="trail" type="checkbox" checked></div>
   <div class="row"><label>Wireframe</label><input id="wf" type="checkbox"></div>
-  <div class="row"><label>Top-down map view</label><input id="map" type="checkbox"></div>
+  <div class="row"><label>Top-down map view</label><input id="map" type="checkbox" checked></div>
   <div class="row"><label>Free-fly (WASD)</label><input id="fly" type="checkbox"></div>
   <div id="flyhint" style="display:none;color:#8b94b8;font-size:11px;margin:2px 0 0">
     Drag to look · <b>W/A/S/D</b> move · <b>R/F</b> up/down · <b>Q/E</b> roll</div>
@@ -239,6 +239,12 @@ function flyTo(toPos,toTgt,dur=800){
 // top-down map view
 let mapMode=false;
 const persPos=camera.position.clone(), persTgt=controls.target.clone();
+// default to top-down on load (checkbox starts checked)
+if(document.getElementById('map').checked){
+  mapMode=true; controls.maxPolarAngle=Math.PI;
+  camera.position.set(0, Math.max(groundW,groundH)*0.95, 1);
+  controls.target.set(0,0,0);
+}
 document.getElementById('map').onchange=e=>{
   mapMode=e.target.checked;
   if(mapMode){ controls.maxPolarAngle=Math.PI; flyTo(new THREE.Vector3(0,Math.max(groundW,groundH)*0.95,1), new THREE.Vector3(0,0,0)); }
