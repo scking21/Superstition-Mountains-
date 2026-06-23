@@ -290,7 +290,8 @@ document.getElementById('stats').innerHTML =
   `Grid ${W}×${H} · ${(W*H/1e6).toFixed(2)}M samples<br>`+
   `Elev ${Math.round(meta.minElev)}–${Math.round(meta.maxElev)} m `+
   `(${Math.round(meta.minElev*3.281)}–${Math.round(meta.maxElev*3.281)} ft)<br>`+
-  `Extent ≈ ${(groundW/1000).toFixed(1)}×${(groundH/1000).toFixed(1)} km`;
+  `Extent ≈ ${(groundW/1000).toFixed(1)}×${(groundH/1000).toFixed(1)} km<br>`+
+  `Lidar vintage: 2020–21 (wilderness) · 2018–19 (canyons)`;
 
 updateMarkers(1.6);
 buildTrail(1.6);

@@ -91,6 +91,7 @@ browser blocks that for safety. You need to start a tiny local web server. If yo
 ## 📜 Data sources & credit
 
 - **Elevation:** [USGS 3DEP](https://www.usgs.gov/3d-elevation-program) lidar-derived elevation (public domain).
+  - **Lidar vintage:** wilderness from the AZ Maricopa/Pinal 2020 collection (flown 2020–2021); the northern canyons (Horse Mesa Dam, Fish Creek, Apache Lake) from the CA/AZ FEMA Region 9 collection (flown 2018–2019).
 - **Satellite imagery:** Esri World Imagery.
 - **Trails, roads & place names:** [© OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL).
 - **3D graphics:** [three.js](https://threejs.org/).
